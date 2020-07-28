@@ -8,10 +8,6 @@ from dash.dependencies import Input, Output, State
 
 import os
 
-from itertools import combinations
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from sklearn import manifold
 from scipy.stats import pearsonr, spearmanr
 import numpy as np
 import pandas as pd
@@ -29,10 +25,14 @@ mapbox_style = "mapbox://styles/mishkice/ckbjhq6w50hlc1io4cnqg7svc"
 # Load data
 dir_path = os.path.dirname(os.path.realpath(__file__))
 df = pd.read_csv(
-    dir_path + '\data\processed\important_(used_in_app)\Merged_asc_fdny_data.csv')
+    'https://raw.githubusercontent.com/MarinaOrzechowski/GasLeakConEd/timeline_branch/data/processed/important_(used_in_app)/Merged_asc_fdny_data.csv')
+df.rename(columns={
+          'housholders_grandparents_responsible_for_grandchildren%': '%housh. grandp resp for grandch'}, inplace=True)
 df = df.dropna()
 centers_df = pd.read_csv(
-    dir_path + '\data\processed\important_(used_in_app)\geoid_with_centers.csv')
+    'https://raw.githubusercontent.com/MarinaOrzechowski/GasLeakConEd/timeline_branch/data/processed/important_(used_in_app)/geoid_with_centers.csv')
+months_df = pd.read_csv(
+    dir_path+'\data\processed\important_(used_in_app)\Merged_asc_fdny_data_months.csv')
 
 # bins
 BINS = [
@@ -42,7 +42,8 @@ BINS = [
     "0.00451-0.006",
     "0.0061-0.0075",
     "0.00751-0.009",
-    "0.0091-10"
+    "0.0091-10",
+    "park_cemetery"
 ]
 
 # colors
@@ -53,7 +54,8 @@ DEFAULT_COLORSCALE = [
     "#6baed6",
     "#4292c6",
     "#2171b5",
-    "#084594"
+    "#084594",
+    "#cbffcb"
 ]
 
 DEFAULT_OPACITY = 0.8
@@ -104,9 +106,7 @@ app.layout = html.Div(
                 dcc.Dropdown(
                     id='dropdownNta',
                     options=[
-                        {
-                            'label': i, 'value': i
-                        } for i in centers_df['nta'].unique()
+                        {'label': i, 'value': i} for i in np.append('all', centers_df['nta'].unique())
                     ],
                     multi=True,
                     placeholder='Choose neighborhoods')
@@ -163,14 +163,6 @@ app.layout = html.Div(
                         {
                             "label": "Scatter matrix (pairwise comparison)",
                             "value": "scatter",
-                        },
-                        {
-                            "label": "PCA",
-                            "value": "pca",
-                        },
-                        {
-                            "label": "ISOMAP",
-                            "value": "isomap",
                         }
                     ],
                     value='scatter',
@@ -186,7 +178,13 @@ app.layout = html.Div(
         ],
             className='row'),
 
-
+        # row with parallel coordinates
+        html.Div([
+            dcc.Graph(
+                id='para_coor'
+            )
+        ],
+            className='row'),
         # row with a map and a matrix
         html.Div([
             # map
@@ -215,35 +213,117 @@ app.layout = html.Div(
                 className='six columns',
                 style={'display': 'inline-block'}),
 
-            # matrix
+            # timeline of gas leaks per person
             html.Div([
                 dcc.Graph(
-                    id='scatter_matrix'
+                    id='timeline_by_month'
                 )
             ],
                 className='six columns',
                 style={'display': 'inline-block'})
         ],
             className='row'),
-
-        # row with parallel coordinates
+        # row with the scatterplots
         html.Div([
             dcc.Graph(
-                id='para_coor'
+                id='scatter_matrix'
             )
         ],
             className='row'),
+
+
+        # row with pearson coeff heatmap
+        html.Div([
+            dcc.Graph(
+                id='pearson_heatmap'
+            )
+        ],
+            className='row')
+
+
 
     ],
         style={'backgroundColor': colors['background']})
 )
 
 
+def hex_to_rgb(hex_color: str) -> tuple:
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = hex_color * 2
+    return int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+
 # callbacks
 
 ######################################################################################################################
-# timeline callback
+# timeline_by_month callback
 ######################################################################################################################
+
+
+@app.callback(
+    Output('timeline_by_month', 'figure'),
+    [
+        Input('mapGraph', 'selectedData'),
+        Input('dropdownNta', 'value')
+    ])
+def display_selected_data(selectedAreaMap, selectedAreaDropdown):
+
+    df_selected = months_df.merge(centers_df, on='geoid')
+    key = 'geoid'
+
+    font_ann = dict(
+        size=10,
+        color=colors['text']
+    )
+
+    if selectedAreaDropdown is not None:
+        if len(selectedAreaDropdown) == 0:
+            pass
+        elif 'all' not in selectedAreaDropdown:
+            df_selected = df_selected[df_selected['nta'].isin(
+                selectedAreaDropdown)]
+    elif selectedAreaMap is not None:
+        points = selectedAreaMap["points"]
+        area_names = [str(point["text"].split("<br>")[2])
+                      for point in points]
+        df_selected = df_selected[df_selected[key].isin(area_names)]
+
+    df_selected = df_selected.groupby(['incident_year', 'incident_month', 'geoid']).agg(
+        {'gas_leaks_per_person': 'mean'}).reset_index()
+
+    # some of the values are inf, as we divide by population, and population is 0 in some areas (like parks)
+    df_selected = df_selected[df_selected['gas_leaks_per_person'] < 1]
+
+    fig = go.Figure()
+    months = [month for month in range(1, 13)]
+    months_str = ['Jan', 'Feb', 'Mar', 'Apr', "May",
+                  'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    for year in range(2013, 2018):
+
+        df_year = df_selected[df_selected['incident_year'] == year].groupby(['incident_month']).agg(
+            {'gas_leaks_per_person': 'mean'}).reset_index()
+        gas_leaks = [df_year.iloc[i]['gas_leaks_per_person']
+                     for i in range(0, 12)]
+        fig.add_trace(go.Scatter(x=months_str, y=gas_leaks,
+                                 line=dict(width=0.5),
+                                 mode='lines+markers',
+                                 name=str(year)))
+    temp_df = df_selected.groupby(['incident_month']).agg(
+        {'gas_leaks_per_person': 'mean'}).reset_index()
+
+    gas_leaks = [temp_df.iloc[i]['gas_leaks_per_person'] for i in range(0, 12)]
+    fig.add_trace(go.Scatter(x=months_str, y=gas_leaks,
+                             line=dict(color='black', width=2),
+                             mode='lines+markers',
+                             name='2013-2017'))
+    fig.update_layout(title='# Gas Leaks per Person (Monthly, for a Given Area)',
+                      xaxis_title='Month',
+                      yaxis_title='Gas Leaks per Person',
+                      plot_bgcolor=colors['background'],
+                      paper_bgcolor=colors['background'])
+    return fig
+
+
 '''
 @ app.callback(
     Output("data_frame", "data"),
@@ -254,6 +334,7 @@ def choose_years(choice_years):
     df = df[(df.incident_date_time.str[6:10] >= choice_years[0]) &
             (df.incident_date_time.str[6:10] <= choice_years[1])]
     return df'''
+
 
 ######################################################################################################################
 # map callback
@@ -390,14 +471,15 @@ def reset_map_selected(selectedDropdown):
         return None
 '''
 ######################################################################################################################
-# scattermatrix callback
+# parallel coordinates | scattermatrix | pearson coeff heatmap callbacks
 ######################################################################################################################
 
 
 @app.callback(
     [
         Output('scatter_matrix', 'figure'),
-        Output('para_coor', 'figure')
+        Output('para_coor', 'figure'),
+        Output('pearson_heatmap', 'figure')
     ],
     [Input("timeline", "value"),
         Input('mapGraph', 'selectedData'),
@@ -410,7 +492,6 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
     df_selected = df[(df.incident_year == year)]
 
     df_selected = df_selected.merge(centers_df, on='geoid')
-    title_part = ' census tracts'
     key = 'geoid'
 
     font_ann = dict(
@@ -419,22 +500,39 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
     )
 
     if selectedAreaDropdown is not None:
-
-        df_selected = df_selected[df_selected['nta'].isin(
-            selectedAreaDropdown)]
+        if len(selectedAreaDropdown) == 0:
+            pass
+        elif 'all' not in selectedAreaDropdown:
+            df_selected = df_selected[df_selected['nta'].isin(
+                selectedAreaDropdown)]
     elif selectedAreaMap is not None:
         points = selectedAreaMap["points"]
         area_names = [str(point["text"].split("<br>")[2])
                       for point in points]
         df_selected = df_selected[df_selected[key].isin(area_names)]
 
-    arr = [str(r) for r in df.columns[3:] if r != 'median_houshold_income']
-    para = px.parallel_coordinates(df_selected, color="geoid",
-                                   dimensions=arr,
-                                   color_continuous_scale=px.colors.diverging.Tealrose,
-                                   color_continuous_midpoint=2
-                                   )
+    #########################################################################################################
+    # parallel coordinates
+    arr = [str(r) for r in df.columns[3:] if (
+        r != 'median_houshold_income') & (r != 'occupied_housing_units%')]
+    dim = [dict(range=[df_selected[attr].min(), df_selected[attr].max()],
+                label=attr.replace('_', ' '), values=df_selected[attr]) for attr in arr]
 
+    para = go.Figure(data=go.Parcoords(line=dict(color=df_selected['gas_leaks_per_person'],
+                                                 colorscale=px.colors.sequential.Viridis,
+                                                 showscale=True
+                                                 ), meta=dict(colorbar=dict(
+                                                     title="gas leaks/person"
+                                                 ),),
+                                       dimensions=dim,
+                                       labelangle=10))
+    para.update_layout(height=500,
+                       plot_bgcolor=colors['background'],
+                       paper_bgcolor=colors['background'],
+
+                       )
+
+    #########################################################################################################
     # scatterplots
     fig = make_subplots(rows=len(selectedAttr), cols=1, subplot_titles=[
         'Gas Leaks per Person VS ' + attr.replace('_', ' ').capitalize() for attr in selectedAttr
@@ -451,20 +549,45 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
                            y=df_selected[df_selected['boro']
                                          == b][selectedAttr[i]],
                            mode='markers',
-                           marker_color=colorscale_by_boro[ind],
+                           marker_color=f"rgba{(*hex_to_rgb(colorscale_by_boro[ind]), 0.6)}",
                            showlegend=show_legend,
                            name=b),
 
                 row=i+1, col=1
             )
 
-    fig.update_traces(mode='markers', marker_line_width=0.5, marker_size=5)
+    fig.update_traces(mode='markers', marker_line_width=0.2, marker_size=3.5)
     fig.update_layout(font=dict(color=colors['text2'], size=12),
                       plot_bgcolor=colors['background'],
                       paper_bgcolor=colors['background'],
                       height=900,
-                      title_text="Comparison of Gas Leak#/person to Other Attributes")
-    return fig, para
+                      title={
+        'text': "<b>Comparison of Gas Leak#/person to Other Attributes</b>",
+        'x': 0.5,
+        'xanchor': 'center'})
+
+    #######################################################################################################
+    # pearson coeff heatmap
+    l = {}
+    df_heatmap = df_selected.drop(
+        ['incident_year', 'Unnamed: 0_x', 'geoid', 'Unnamed: 0_y', 'centerLong', 'centerLat'], axis=1)
+    pearsoncorr = df_heatmap.corr(method='pearson')
+    heatmap = go.Figure(data=go.Heatmap(
+        z=[pearsoncorr[i] for i in pearsoncorr.columns],
+        x=[row.replace('_', ' ').capitalize() for row in pearsoncorr.columns],
+        y=[row.replace('_', ' ').capitalize() for row in pearsoncorr.columns],
+        colorscale='Viridis'
+    ))
+    heatmap.update_layout(
+        title={
+            'text': '<b>Pearson correlation coefficient</b>',
+            'y': 0.9,
+            'x': 0.5,
+            'xanchor': 'center',
+            'yanchor': 'top'},
+        height=700,
+        autosize=False)
+    return fig, para, heatmap
 
 
 if __name__ == '__main__':
