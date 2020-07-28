@@ -32,7 +32,10 @@ df = df.dropna()
 centers_df = pd.read_csv(
     'https://raw.githubusercontent.com/MarinaOrzechowski/GasLeakConEd/timeline_branch/data/processed/important_(used_in_app)/geoid_with_centers.csv')
 months_df = pd.read_csv(
-    dir_path+'\data\processed\important_(used_in_app)\Merged_asc_fdny_data_months.csv')
+    'https://raw.githubusercontent.com/MarinaOrzechowski/GasLeakConEd/timeline_branch/data/processed/important_(used_in_app)/Merged_asc_fdny_data_months.csv')
+property_use_df = pd.read_csv(
+    r'C:\Users\mskac\machineLearning\GasLeakConEd\data\processed\important_(used_in_app)\FULL_fdny_2013_2018.csv')
+
 
 # bins
 BINS = [
@@ -185,7 +188,7 @@ app.layout = html.Div(
             )
         ],
             className='row'),
-        # row with a map and a matrix
+        # row with a map, a timeline by month, and a property use barchart
         html.Div([
             # map
             html.Div([
@@ -215,9 +218,14 @@ app.layout = html.Div(
 
             # timeline of gas leaks per person
             html.Div([
-                dcc.Graph(
-                    id='timeline_by_month'
-                )
+                html.Div([
+                    dcc.Graph(
+                        id='timeline_by_month'
+                    )], className='row'),
+                html.Div([
+                    dcc.Graph(
+                        id='property_use_barchart'
+                    )], className='row')
             ],
                 className='six columns',
                 style={'display': 'inline-block'})
@@ -269,6 +277,8 @@ def hex_to_rgb(hex_color: str) -> tuple:
 def display_selected_data(selectedAreaMap, selectedAreaDropdown):
 
     df_selected = months_df.merge(centers_df, on='geoid')
+    df_selected = df_selected[df_selected['nta'].str[:6]
+                              != 'park-c']
     key = 'geoid'
 
     font_ann = dict(
@@ -316,11 +326,15 @@ def display_selected_data(selectedAreaMap, selectedAreaDropdown):
                              line=dict(color='black', width=2),
                              mode='lines+markers',
                              name='2013-2017'))
-    fig.update_layout(title='# Gas Leaks per Person (Monthly, for a Given Area)',
-                      xaxis_title='Month',
+    fig.update_layout(xaxis_title='Month',
                       yaxis_title='Gas Leaks per Person',
                       plot_bgcolor=colors['background'],
-                      paper_bgcolor=colors['background'])
+                      paper_bgcolor=colors['background'],
+                      title={
+                          'text': "<b># Gas Leaks per Person (Monthly, for a Given Area)</b>",
+                          'x': 0.5,
+                          'xanchor': 'center'}
+                      )
     return fig
 
 
@@ -334,8 +348,72 @@ def choose_years(choice_years):
     df = df[(df.incident_date_time.str[6:10] >= choice_years[0]) &
             (df.incident_date_time.str[6:10] <= choice_years[1])]
     return df'''
+######################################################################################################################
+# property use barchart callback
+######################################################################################################################
 
 
+@app.callback(
+    Output('property_use_barchart', 'figure'),
+    [
+        Input('mapGraph', 'selectedData'),
+        Input('dropdownNta', 'value'),
+        Input('timeline', 'value')
+    ])
+def display_selected_data(selectedAreaMap, selectedAreaDropdown, selectedYear):
+
+    df_selected = property_use_df
+    df_selected = df_selected[df_selected['incident_date_time'].str[6:10] == str(
+        selectedYear)]
+
+    key = 'geoid'
+
+    font_ann = dict(
+        size=10,
+        color=colors['text']
+    )
+
+    if selectedAreaDropdown is not None:
+        if len(selectedAreaDropdown) == 0:
+            pass
+        elif 'all' not in selectedAreaDropdown:
+            df_selected = df_selected[df_selected['ntaname'].isin(
+                selectedAreaDropdown)]
+    elif selectedAreaMap is not None:
+        points = selectedAreaMap["points"]
+        area_names = [str(point["text"].split("<br>")[2])
+                      for point in points]
+        df_selected = df_selected[df_selected[key].isin(area_names)]
+
+    df_selected['count'] = 1
+    df_selected = df_selected.groupby(['property_use_desc']).agg(
+        {'count': 'count'}).reset_index().sort_values(by='count', ascending=False)
+    total = df_selected['count'].sum()
+    df_selected['percent'] = df_selected['count'] / total*100
+    df_selected = df_selected.append({'property_use_desc': 'other', 'count': total-df_selected['count'][:10].sum(
+    ), 'percent': 100 - df_selected['percent'][:10].sum()}, ignore_index=True)
+    # sort data again so 'other' row takes correct place
+    df_selected = df_selected.sort_values('percent', ascending=False)
+
+    piechart = go.Figure(data=[go.Pie(
+        labels=df_selected[:11]['property_use_desc'],
+        values=df_selected[:11]['count'],
+    )],
+        layout=go.Layout(
+            paper_bgcolor=colors['background'],
+            plot_bgcolor=colors['background'],
+            font={
+                'color': colors['text2'],
+                'size': 12
+            },
+            title={
+                'text': "<b>Use of Properties where Gas Leaks Happened</b>",
+                'x': 0.5,
+                'xanchor': 'center'}))
+    piechart.update_traces(hoverinfo='label+value', textinfo='text+percent', opacity=0.9,
+                           marker=dict(colors=px.colors.qualitative.Prism, line=dict(color='#000000', width=1)))
+
+    return piechart
 ######################################################################################################################
 # map callback
 ######################################################################################################################
@@ -492,6 +570,8 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
     df_selected = df[(df.incident_year == year)]
 
     df_selected = df_selected.merge(centers_df, on='geoid')
+    df_selected = df_selected[df_selected['nta'].str[:6]
+                              != 'park-c']
     key = 'geoid'
 
     font_ann = dict(
@@ -542,16 +622,17 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
     for i in range(len(selectedAttr)):
 
         for ind, b in enumerate(df_selected['boro'].unique()):
+            temp = df_selected[df_selected['boro'] == b]
             if i > 0:
                 show_legend = False
             fig.add_trace(
-                go.Scatter(x=df_selected[df_selected['boro'] == b]['gas_leaks_per_person'],
-                           y=df_selected[df_selected['boro']
-                                         == b][selectedAttr[i]],
+                go.Scatter(x=temp['gas_leaks_per_person'],
+                           y=temp[selectedAttr[i]],
                            mode='markers',
                            marker_color=f"rgba{(*hex_to_rgb(colorscale_by_boro[ind]), 0.6)}",
                            showlegend=show_legend,
-                           name=b),
+                           name=b,
+                           text=temp['hover']),
 
                 row=i+1, col=1
             )
@@ -561,6 +642,7 @@ def display_selected_data(year, selectedAreaMap, selectedAreaDropdown, selectedA
                       plot_bgcolor=colors['background'],
                       paper_bgcolor=colors['background'],
                       height=900,
+
                       title={
         'text': "<b>Comparison of Gas Leak#/person to Other Attributes</b>",
         'x': 0.5,
