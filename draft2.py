@@ -54,8 +54,8 @@ centers_df = pd.read_csv(
 
 df = df.merge(centers_df, on='geoid')
 df['hover'] = df['hover']+'<br>#Gas leaks per person: ' + \
-    df['gas_leaks_per_person'].round(6).astype(str)+'<br>Avg. built year: ' + \
-    df['avg_year_built'].round(5).astype(str)
+    df['gas_leaks_per_person'].round(6).astype(str)+'<br>Avg. bldg age: ' + \
+    df['avg_bldg_age'].round(5).astype(str)
 df = df.drop(['Unnamed: 0_x','Unnamed: 0_y','polygon'], axis = 1)
 
 months_df = pd.read_csv(
@@ -74,8 +74,8 @@ df_all_years = df_all_years.dropna()
 df_all_years = df_all_years.merge(centers_df, on='geoid')
 df_all_years = df_all_years.drop(['Unnamed: 0_x','Unnamed: 0_y','polygon'], axis = 1)
 df_all_years['hover'] = df_all_years['hover']+'<br>#Gas leaks per person: ' + \
-    df_all_years['gas_leaks_per_person'].round(6).astype(str)+'<br>Avg. built year: ' + \
-    df_all_years['avg_year_built'].round(5).astype(str)
+    df_all_years['gas_leaks_per_person'].round(6).astype(str)+'<br>Avg. bldg age: ' + \
+    df_all_years['avg_bldg_age'].round(5).astype(str)
 
 
 
